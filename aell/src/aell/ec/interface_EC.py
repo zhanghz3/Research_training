@@ -1,0 +1,188 @@
+import numpy as np
+import time
+from .evolution import Evolution
+from .selection import parent_selection
+
+
+class InterfaceEC:
+    def __init__(self, pop_size, m, debug_mode, interface_eval, object, ob, **kwargs):
+        # -------------------- RZ: use local LLM --------------------
+        assert 'use_local_llm' in kwargs
+        assert 'url' in kwargs
+        # -----------------------------------------------------------
+
+        # LLM settings
+        self.pop_size = pop_size
+        self.interface_eval = interface_eval
+        self.evol = Evolution(debug_mode, object=object, ob=ob, **kwargs)
+        self.m = m
+        
+    #def code2file(self,code):
+        #with open("./ael_alg.py", "w") as file:
+        # Write the code to the file
+        #    file.write(code)
+        #print("code",code)
+        #pass
+    #    return
+
+    def code2file(self, text, filename="caption.txt"):
+        with open(filename, "w", encoding="utf-8") as file:
+            file.write(text)
+
+    def add2pop(self,population,offspring):
+        for ind in population:
+            if ind['objective'] == offspring['objective']:
+                print("duplicated result, retrying ... ")
+                return False
+        population.append(offspring)
+        return True
+    
+    def check_duplicate(self,population,code):
+        for ind in population:
+            if code == ind['code']:
+                return True
+        return False
+
+    # def population_management(self,pop):
+    #     # Delete the worst individual
+    #     pop_new = heapq.nsmallest(self.pop_size, pop, key=lambda x: x['objective'])
+    #     return pop_new
+    
+    # def parent_selection(self,pop,m):
+    #     ranks = [i for i in range(len(pop))]
+    #     probs = [1 / (rank + 1 + len(pop)) for rank in ranks]
+    #     parents = random.choices(pop, weights=probs, k=m)
+    #     return parents
+
+    def population_generation(self):
+        population = []
+        n_create = 0
+        while (len(population)!=self.pop_size):
+            n_create += 1
+            _, individual = self.get_algorithm(population,'i1')
+            self.add2pop(population,individual)
+            print(f"algorithm with fitness {individual['objective']} has been designed")
+            
+        print("Initiliazation finished! create "+str(n_create)+" times ")
+
+        return population
+    
+    def population_generation_seed(self,seeds):
+        population = []
+
+        for seed in seeds:
+            seed_alg = {
+                'code': seed['code'],
+                'objective': None
+            }
+            self.code2file(seed_alg['code'])
+            try:
+                fitness = seed['objective']
+            except Exception as e:
+                fitness = None
+                print("Error in seed algorithm")
+                exit()
+            fitness = np.array(fitness)
+            print(fitness)
+            seed_alg['objective'] = np.round(fitness, 5)
+            population.append(seed_alg)
+
+        print("Initiliazation finished! Get "+str(len(seeds))+" seed algorithms")
+
+        return population
+    def population_generation_seed_find(self, seeds):
+        population = []
+
+        # 迭代 seeds 的值
+        for seed in seeds.values():
+            seed_alg = {
+                'code': seed['code'],
+                'objective': seed["objective"],
+                "parent1": seed["parent1"],
+                "parent2": seed["parent2"],
+                "answer":seed["answer"],
+            }
+            self.code2file(seed_alg['code'])
+            try:
+                fitness = seed['objective']
+            except Exception as e:
+                fitness = None
+                print("Error in seed algorithm:", e)
+                exit()
+            fitness = np.array(fitness)
+            print(fitness)
+            population.append(seed_alg)
+
+        #print("Initialization finished! Get " + str(len(seeds)) + " seed algorithms")
+        return population
+
+    def _get_alg(self,pop,operator):
+        algorithm = None
+        offspring = {
+            'code': None,
+            'objective': None
+        }
+        if operator == "i1":
+            parents = None
+            [offspring['code'],algorithm] =  self.evol.i1()            
+        elif operator == "e1":
+            parents = parent_selection(pop,self.m)
+            [offspring['code'],algorithm] = self.evol.e1(parents)
+        elif operator == "e2":
+            parents = parent_selection(pop,self.m)
+            [offspring['code'],algorithm] = self.evol.e2(parents)
+        elif operator == "m1":
+            parents = parent_selection(pop,1)
+            [offspring['code'],algorithm] = self.evol.m1(parents[0])
+        elif operator == "m2":
+            parents = parent_selection(pop,1)
+            [offspring['code'],algorithm] = self.evol.m2(parents[0])
+        else:
+            print(f"Evolution operator [{operator}] has not been implemented ! \n") 
+
+        return parents, offspring
+
+
+    def get_algorithm(self,pop,operator):
+        answer=None
+        p,offspring = self._get_alg(pop,operator)
+        while self.check_duplicate(pop,offspring['code']):
+            print("duplicated code, wait 1 second and retrying ... ")
+            time.sleep(1)
+            p,offspring = self._get_alg(pop,operator)
+        self.code2file(offspring['code'])
+        try:
+            fitness= self.interface_eval.evaluate()
+            if isinstance(fitness, tuple):
+                fitness, answer = fitness # 解包两个返回值
+            else:
+                fitness = fitness  # 只有一个返回值
+        except:
+            fitness = None
+        offspring['objective'] =  fitness
+        if answer!=None:
+            offspring['answer'] = answer
+        while (fitness == None):
+            print("warning! error code, retrying ... ")
+            p,offspring = self._get_alg(pop,operator)
+            while self.check_duplicate(pop,offspring['code']):
+                print("duplicated code, wait 1 second and retrying ... ")
+                time.sleep(1)
+                p,offspring = self._get_alg(pop,operator)
+            self.code2file(offspring['code'])
+            try:
+                fitness = self.interface_eval.evaluate()
+                if isinstance(fitness, tuple):
+                    fitness, answer = fitness  # 解包两个返回值
+                else:
+                    fitness = fitness  # 只有一个返回值
+            except:
+                fitness = None
+            offspring['objective'] =  fitness
+            if answer != None:
+                offspring['answer'] = answer
+        offspring['objective'] = np.round(offspring['objective'],5)
+        offspring["parent1"]=p[0]["code"]
+        if len(p)==2:
+            offspring["parent2"] = p[1]["code"]
+        return p,offspring
